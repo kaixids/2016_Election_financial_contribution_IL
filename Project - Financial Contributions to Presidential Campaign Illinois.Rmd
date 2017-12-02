@@ -1,0 +1,522 @@
+
+#**Financial Contribution for 2016 Election (Illinois)**
+###**by Kai Xi**   
+
+  
+#**Abstract**
+Who received the most contributions? Are candidates who got more contributions more likely to get more votes? How are contributors distributed geographically? Are there any patterns for different candidates? What are the profiles of contributors for different candidates/parties? 
+
+This report explores the data of financial contributions in Illinois for the 2016 Election in hope to find answers to these questions.
+
+
+#**Dataset**
+  
+##**Preparations**
+  
+```{r setup, include=FALSE}
+suppressMessages(library(reshape))
+suppressMessages(library(reshape2))
+suppressMessages(library(ggplot2))
+suppressMessages(library(dplyr))
+suppressMessages(library(maps))
+suppressMessages(library(RColorBrewer))
+suppressMessages(library(GGally))
+suppressMessages(library(scales))
+suppressMessages(library(memisc))
+library(mapproj)
+library(zipcode)
+library(ggmap)
+library(gridExtra)
+```
+  
+Importing Data and examine what is contained in there.
+  
+```{r  warning=FALSE}
+FC <- read.csv('P00000001-IL.csv')
+str(FC)
+```
+
+Remove duplicate/irrelevant columns:  
+  + cmte_id,cand_id: duplicate data with candidate names  
+  + tran_id: not relevant for our analysis  
+  + contbr_st: the dataset is for Illinois  
+  + memo_text: out of scope of analysis  
+  + memo_cd: same as above  
+  + file_num: not relevant for our analysis  
+  + form_tp: not useful for our analysis  
+  + receipt_desc: not useful for our analysis 
+
+```{r warning=FALSE}
+FC <- subset(FC, select = -c(cmte_id,cand_id,tran_id,contbr_st,
+                             memo_text,memo_cd,file_num,form_tp,receipt_desc))
+FC <- rename(FC, c('cand_nm'           = 'Candidate_name',
+                   'contbr_nm'         = 'Contr_Name',
+                   'contbr_city'       = 'Contr_City',
+                   'contbr_zip'        = 'Contr_zip',
+                   'contbr_employer'   = 'Contr_employer',
+                   'contbr_occupation' = 'Contr_occupation',
+                   'contb_receipt_amt' = 'Contr_amount',
+                   'contb_receipt_dt'  = 'Contr_date'))
+FC$Contr_zip <- factor(FC$Contr_zip)
+
+str(FC)
+
+```
+  
+  
+Taking a look at the contribution amount overall:  
+
+```{r message=FALSE, warning=FALSE}
+ggplot(data = FC, aes(x = Contr_amount)) +
+  geom_histogram(color = 'black', fill = 'orange')
+```
+  
+This plot does not show much.  
+  
+Let's try applying a log10 scale for the amount:  
+  
+```{r message=FALSE, warning=FALSE}
+ggplot(data = FC, aes(x = Contr_amount)) +
+  geom_histogram(color = 'black', fill = 'orange') +
+  scale_x_log10()
+```
+  
+  
+Taking a look at boxplot:  
+  
+```{r message=FALSE, warning=FALSE}
+ggplot(data = FC, aes(x = 1, y = Contr_amount)) + 
+  geom_boxplot() + 
+  scale_y_log10()
+```
+Most donations are under 100.  
+
+Let's take a look at a summary table for different candidates:  
+  
+```{r message=FALSE, warning=FALSE}
+#Group by each candidate, summarise mean, median, sum and total number of contributions, then filter out those with less than half a million in donation.
+FC_updated <- FC %>% group_by(Candidate_name) %>%
+  summarise(sum_amount = sum(Contr_amount), 
+            median_amount = median(Contr_amount),
+            mean_amount = mean(Contr_amount),
+            max_amount = max(Contr_amount),
+            n = n()) %>%
+  arrange(desc(sum_amount))
+
+#resetting factors 
+FC_updated$Candidate_name <- factor(FC_updated$Candidate_name)
+
+#resulting table is as below
+FC_updated
+
+```
+  
+  
+  
+```{r message=FALSE, warning=FALSE}
+ggplot(data = FC_updated, aes(Candidate_name, sum_amount)) +
+  geom_col(fill = 'orange') +
+  coord_flip()
+```
+  
+Taking a look at the boxplot:  
+  
+```{r message=FALSE, warning=FALSE}
+ggplot(data = FC, aes(y = Contr_amount, x = Candidate_name)) + 
+  geom_boxplot() + 
+  scale_y_log10() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+  
+  
+Keeping only candidates who have more than half a million in contributions. This would make subsequent analysis by candidates easier.  
+
+  
+```{r message=FALSE, warning=FALSE}
+#Group by each candidate, summarise mean, median, sum and total number of contributions, then filter out those with less than half a million in donation.
+FC_selected <-  subset(FC_updated, sum_amount > 500000)
+
+#resetting factors 
+FC_selected$Candidate_name <- factor(FC_selected$Candidate_name)
+
+#resulting table is as below
+FC_selected
+
+```
+  
+
+  
+Remove observations of removed candidates from the main dataframe and create a copy:  
+
+```{r message=FALSE, warning=FALSE}
+
+#keeping a copy of original dataset
+FC_copy <- FC
+
+FC <- subset(FC, (FC$Candidate_name %in% 
+                    levels(FC_selected$Candidate_name)))
+FC <- subset(FC, FC$Contr_amount > 0)
+
+levels(FC_selected$Candidate_name)
+```
+  
+####**Total contributions by candidates**  
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+ggplot(data = FC_selected, aes(Candidate_name, sum_amount)) +
+  geom_col(fill = 'orange') +
+  coord_flip()
+```
+
+
+Create Factor Variable: Democrat, Republican, Third Parties and Independents and add to existing main dataframe:  
+
+```{r message=FALSE, warning=FALSE}
+#manually create dataframe that assigns political party to each candidate
+Candidates <- levels(FC_selected$Candidate_name)
+Candidate_Party <- c('Republican', 'Republican','Democratic','Republican',
+                     'Republican','Republican','Democratic','Republican')
+df_CP <- data.frame(Candidates,Candidate_Party)
+
+#matching df_CP to the main dataframe
+FC$Party <- df_CP$Candidate_Party[match(FC$Candidate_name, df_CP$Candidates)]
+```
+  
+####**Plotting amount histogram by parties**  
+  
+```{r message=FALSE, warning=FALSE}
+ggplot(data = FC, aes(x = Contr_amount)) + 
+  geom_histogram(color = 'black', fill = 'orange', bins = 50) + 
+  xlim(0, 500) + 
+  facet_wrap(~Party, ncol = 2)
+```
+   
+Not surprisingly, most people donated below $100 as the density seems much higher on the left side of the plots. Again, we take the logarithmic value of the contributions to address this and turn the distribution into something that more closely resemble normal distributions. Applying a layer of color for different candidates just for fun.  
+  
+###**Log Scale Histogram for Contributions**  
+```{r message=FALSE, warning=FALSE}
+ggplot(data = FC, aes(x = Contr_amount, fill = Candidate_name)) + 
+  geom_histogram(color = 'gray', bins = 50)  + 
+  facet_wrap(~Party, ncol = 2) + 
+  scale_x_log10()
+```
+  
+The plots indeed seem closer to a normal distribution. The plots match summary. Clinton received the most contributions by far, more than 4x the second highest.  
+  
+  
+Let's look at the boxplot of contributions for each candidate  
+  
+```{r message=FALSE, warning=FALSE}
+ggplot(data = FC, aes(y = Contr_amount, x = Candidate_name)) + 
+  geom_boxplot() + 
+  scale_y_log10() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+
+####**Plotting contribution histogram individually for each candidate**  
+```{r fig.height=10, fig.width=8, message=FALSE, warning=FALSE}
+ggplot(data = FC, aes(x = Contr_amount)) + 
+  geom_histogram(color = 'orange', bins = 200)  + 
+  facet_wrap(~Candidate_name, scales = 'free',ncol=2) + 
+  scale_x_log10()
+```
+
+Following the example from the course instruction. I wanted to create maps showing contributions. Unlike the example, I was not given longtitude and latitude in the dataset. However, the dataset does contain the postal codes. I researched on Google and found a way to turn zipcodes into geographical coordinates using the <zipcode> library, with the help from the link below:  [link](https://austinwehrwein.com/digital-humanities/creating-a-density-map-in-r-with-zipcodes/)
+  
+  
+Below are the steps I took to clean up the zipcodes and match them with according longtitudes and latitudes.
+  
+```{r message=FALSE, warning=FALSE}
+
+#cleaning up zipcodes
+data("zipcode")
+FC$Contr_zip <- clean.zipcodes(FC$Contr_zip)
+
+#keeping only the first 5 digits of zipcode to be matched with zipcode library
+FC$Contr_zip <- substr(FC$Contr_zip, 0, 5)
+
+#matching zipcode onto dataframe
+FC$lat <- zipcode$latitude[match(FC$Contr_zip, zipcode$zip)]
+FC$lng <- zipcode$longitude[match(FC$Contr_zip, zipcode$zip)]
+
+#now the new dataframe looks like this:
+head(FC)
+```
+  
+
+
+
+####**Plotting contributor map by candidates**   
+  
+I wanted to see overall how the contributions for all (remaining) candidates look like over the map. So I assigned each candidate a different color, the size of donations to the size of dots. I also adjusted the limits of x and y axis so that the map is zoomed in to Illinois. I experimented with different type of <coord_map()> projections and decided on "orthographic" because it elongates the map horizontally.
+
+```{r message=FALSE, warning=FALSE}
+
+us <- map_data('state')
+illinois <- subset(us, region == 'illinois')
+counties <- map_data("county")
+il_county <- subset(counties, region == 'illinois')
+ggplot(aes(x = lng, y = lat, color = Candidate_name, 
+           size = Contr_amount), data = FC) + 
+  geom_point(alpha = 0.1) +
+  geom_polygon(data = illinois, aes(x = long, y = lat, group = group),
+               color = 'gray', fill = 'gray', alpha = 0.3, inherit.aes = FALSE) +
+  xlim(-92, -87) + 
+  ylim(37, 43) + 
+  coord_fixed(1) +
+  geom_polygon(data = il_county, aes(x = long, y = lat, group = group),
+                fill = NA, color = "white", inherit.aes = FALSE) +
+  theme(panel.grid = element_blank(), panel.background = element_blank())
+ 
+
+```
+  
+From the plot, we cannot really tell size from density. The colors don't work very well because there are too many colors on a very densed map.  
+  
+  
+Let's try plotting contributions on map, colored by political leanings.  
+  
+####**Plotting contributor map by parties**  
+  
+```{r message=FALSE, warning=FALSE}
+ggplot(aes(x = lng, y = lat, color = Party, 
+           size = Contr_amount), data = FC) + 
+  geom_point(alpha = 0.2) +
+  geom_polygon(data = illinois, aes(x = long, y = lat, group = group),
+               color = 'gray', alpha = 0.2, inherit.aes = FALSE) +
+  xlim(-92, -87) + 
+  ylim(37, 43) + 
+  coord_fixed(1) +
+  geom_polygon(data = il_county, aes(x = long, y = lat, group = group),
+                fill = NA, color = "white", inherit.aes = FALSE) +
+  theme(panel.grid = element_blank(), panel.background = element_blank())
+```
+  
+  
+This is very interesting. Even though democratic party received most of the contributions, the map is pretty overwhelmed by the blue that represents republican. Looking at the <str> data of the dataframe, there are only 50k contributor for more than 250k contributions. People can donate different amounts but each person only get one vote. It might be interesting to look into the data of unique contributors - this is definitely closer to the vote counts that they are likely to get.
+  
+  
+```{r message=FALSE, warning=FALSE}
+unique_contr <- FC %>% 
+  group_by(Candidate_name) %>% 
+  summarise(unique_contributors = n_distinct(Contr_Name)) %>%
+  arrange(desc(unique_contributors))
+
+unique_contr
+```
+  
+  
+  
+####**Plotting unique contributor by candidate:**  
+  
+```{r message=FALSE, warning=FALSE}
+ggplot(unique_contr, aes(Candidate_name, unique_contributors)) + 
+  geom_col(color = 'black', fill = 'orange') +
+  coord_flip()
+```
+  
+    
+We can see that Trump and Clinton are actually pretty close in the numbers of unique contributors - this was far from clear if we only look at the total amount or total number of contributions for each.
+  
+Let's put the plot of total contribution by candidates and the plot of unique contributor by candidate side by side.
+   
+   
+####**Plots Total Contributions vs Number of Unique Contributors**
+```{r fig.height=5, fig.width = 15, message=FALSE, warning=FALSE} 
+f1 = ggplot(data = FC_selected, aes(Candidate_name, sum_amount)) +
+  geom_col(fill = 'orange', color = 'black') +
+  coord_flip()
+f2 = ggplot(unique_contr, aes(Candidate_name, unique_contributors)) + 
+  geom_col(color = 'black', fill = 'orange') +
+  coord_flip()
+
+grid.arrange(f1, f2, ncol = 2)
+
+```
+  
+  
+Checking the number of unique contributors by parties:
+  
+    
+```{r message=FALSE, warning=FALSE}
+unique_contr_party <- FC %>% 
+  group_by(Party) %>% 
+  summarise(unique_contributors = n_distinct(Contr_Name)) %>%
+  arrange(desc(unique_contributors))
+
+unique_contr_party
+```
+  
+  
+I want to get a sense of who have donated more than once. 
+  
+  
+```{r message=FALSE, warning=FALSE}
+top_contributors <- FC %>%
+  group_by(Contr_Name) %>%
+  summarise(mean = mean(Contr_amount),
+            n=n()) %>%
+  arrange(desc(n))
+
+
+top_contributors$party <- 
+  FC$Party[match(top_contributors$Contr_Name, FC$Contr_Name)]
+top_contributors$candidate <- 
+  FC$Candidate_name[match(top_contributors$Contr_Name, FC$Contr_Name)]
+head(top_contributors, 20)
+```
+  
+  
+It looks like they are mostly democratic contributors. In fact, there are only one republican in the top 50 contributor by the times they have donated.  
+  
+Let's try plotting this:  
+  
+```{r message=FALSE, warning=FALSE}
+ggplot(aes(x = n, y = mean, color = party), 
+       data = top_contributors) + 
+  geom_point() 
+```
+  
+There is definitely a pattern between democratic and republican contributors. Let's try log scale.
+  
+```{r message=FALSE, warning=FALSE}
+ggplot(aes(x = n, y = mean, color = party), data = top_contributors) + 
+  geom_point(alpha = 0.2) +
+  scale_x_log10() + 
+  scale_y_log10() 
+```
+  
+Very interesting. Significantly more democrats contributed many times. Those who donated highest amounts are mostly republicans.  
+  
+####**Contribution Map by Candidate**
+  
+```{r fig.height = 15, fig.width = 7, message=FALSE, warning=FALSE}
+ggplot(aes(x = lng, y = lat, color = Contr_amount), data = FC) + 
+  geom_point() +
+  geom_polygon(data = illinois, aes(x = long, y = lat, group = group),
+               color = 'gray', alpha = 0.2, inherit.aes = FALSE) +
+  xlim(-92, -87) + ylim(37, 43)  + 
+  facet_wrap(~Candidate_name, ncol = 2) + 
+  coord_fixed(1) +
+  geom_polygon(data = il_county, aes(x = long, y = lat, group = group),
+                fill = NA, color = "white", inherit.aes = FALSE) +
+  theme(panel.grid = element_blank(), panel.background = element_blank()) +
+  scale_color_gradient(trans = 'log10')
+  
+
+```
+  
+####**Occupations**:
+
+First I took a quick scan at the contributors' occupations using <sample> and <head> functions. It looks like there are a lot of similar occupations written in different formats. It would be difficult to categorize all the occupations precisely. But it might be possible to categorize some of the major occupations. Since I do not have a classified list to train a model, I can only do this manually. The goal is to have ~10 occupation categories. 
+
+```{r message=FALSE, warning=FALSE}
+head(levels(FC$Contr_occupation), 20)
+```
+  
+I did extensive research, asked for help from support and mentor. No viable solution came up. 
+  
+Let's sample by contributors to get a sense of how much and when they donated.
+  
+```{r fig.height = 10, fig.width = 10,message=FALSE, warning=FALSE}
+
+set.seed(100)
+sample.contri_names <- sample(levels(FC$Contr_Name), 32)
+
+ggplot(data = subset(FC, Contr_Name %in% sample.contri_names), 
+       aes(x = Contr_date, y = Contr_amount, color = Candidate_name)) +
+  facet_wrap(~Contr_Name, ncol = 4) + 
+  geom_point() +
+  scale_y_log10()
+
+```
+    
+It looks like the democrats, particularly Hillary supporters typically donate many times and Trump supporters donate only once. There is no obvious patterns with the date they donate. Interestsingly, one of the sample contributors donated to two candidates: both Clinton and Sanders.
+  
+  
+  
+  
+#**Final Plots and Summary**
+  
+  
+####**Histogram of Contributions to Candidates of Different Parties**
+  
+This plot shows the histogram of contributions received by amounts, colored by different candidates. We can tell that:  
++ Democratic party candidates received significantly more contributions  
++ Hillary Clinton received the most contributions by far
++ Donation amounts seems to be somewhat normally distributed around just below $100 after taking log10 scale.
+
+```{r message=FALSE, warning=FALSE}
+ggplot(data = FC, aes(x = Contr_amount, fill = Candidate_name)) + 
+  geom_histogram(color = 'gray', bins = 50)  + 
+  facet_wrap(~Party, ncol = 2) + 
+  scale_x_log10()
+```
+  
+  
+   
+####**Total Contribution Received by Candidates VS Number of Unique Contributors by Candidates**
+  
+The number of unique contributors is likely a far better indicator of vote counts because many people doate more than once but everyone only gets one vote. Even though Hillary Clinton received significant larger contributions, her number of unique contributors is not that far off from Donald Trump's number. 
+
+```{r, fig.height=5, fig.width=15, message=FALSE, warning=FALSE}
+f1 = ggplot(data = FC_selected, aes(Candidate_name, sum_amount)) +
+  geom_col(fill = 'orange', color = 'black') +
+  coord_flip() +
+  ggtitle('Total Contribution Received by Candidates') +
+  ylab('Sum of Contributions ($)') +
+  xlab('Candidates')
+f2 = ggplot(unique_contr, aes(Candidate_name, unique_contributors)) + 
+  geom_col(color = 'black', fill = 'orange') +
+  coord_flip() +
+  ggtitle('Number of Unique Contributors by Candidates') +
+  ylab('Number of Unique Contributors') +
+  xlab('')
+  
+grid.arrange(f1, f2, ncol = 2)
+```
+  
+    
+      
+####**Geographic Distribution of Contributors by Candidates**
+  
+These plots show some very interesting contributor patterns for different candidates. Notably, with the highest amount of total contributions (more than 4x of every other candidate), Clinton's heat map is not filled as much as Trump's. This indicates that more of Trump's contributors are from rural area.
+
+```{r fig.height = 15, fig.width = 7, message=FALSE, warning=FALSE}
+ggplot(aes(x = lng, y = lat, color = Contr_amount), data = FC) + 
+  geom_point() +
+  geom_polygon(data = illinois, aes(x = long, y = lat, group = group),
+               color = 'gray', alpha = 0.2, inherit.aes = FALSE) +
+  xlim(-92, -87) + ylim(37, 43)  + 
+  facet_wrap(~Candidate_name, ncol = 2) + 
+  coord_fixed(1) +
+  geom_polygon(data = il_county, aes(x = long, y = lat, group = group),
+                fill = NA, color = "white", inherit.aes = FALSE) +
+  theme(panel.grid = element_blank(), panel.background = element_blank()) +
+  scale_color_gradient(trans = 'log10') +
+  ggtitle('Geographic Distribution of Contributors by Candidates') +
+  xlab('Longtitude') +
+  ylab('Latitude') 
+
+```
+  
+  
+  
+  
+##**Reflections**
+  
+The dataset contains limited numerical data. Out of the 18 variables, contribution date and contribution amount are the only numerical variables that we can work with. So there is limited room for correlation analysis. Many of the variables are irrelevant. A quick scan revealed that a limited set of variables can be actually utilized: contributor's name, contribution date, amount, candidate name and the zip code. I first looked at contribution amount, by total and by distribution. Then I tried creating heat maps. A heat map revealed that republican contributors appear very robust even though the total contributions/contribution counts are way less. I spent some time thinking why that could be the case and thought it would be interesting to find out how many contributors each candidate had. As it turned out, most of the democratic contributors contributed more than once. I realized that unique contributors would be a far better indicator for the voting results.   
+   
+I realized how much more I could do at every step. It was a fascinating process!  
+  
+Struggles:   
+  
++ The limitation of the data presented the initial difficulty: I was not sure if I can come up with an extensive analysis with them. However, each step revealed something new and pointed me to different directions to go further, deeper.
++ I had limited understanding of the electoral college system. If I did the process would have been much faster. I would know sooner how to frame my questions and where to look.
++ I got sidetracked easily - wanting to create prettier plots, getting stuck at line of code and ending up looking at things way beyond the problem at hand etc.
+   
+Learning how to plot the data on the map was very interesting. I loved the process of making pretty graphs. I think visualization is where I want to put in more effort into in the future. I wanted to further categorize occupation and do more analysis based on that. Unfortunately that was out of my scope of knowledge at this point. I think taking just a few steps to examine the data for unique contributors can predict election results fairly effectively.  
+  
+  
+  
+
